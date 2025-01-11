@@ -1,0 +1,338 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Triff das Eliane!</title>
+    <style>
+        body {
+            margin: 0;
+            font-family: Arial, sans-serif;
+            /*touch-action: none;*/
+            overflow: hidden;
+        }
+        #game-container {
+            width: 100vw;
+            height: 100vh;
+            background-color: #f0f0f0;
+            position: relative;
+        }
+        #header {
+            background-color: #006179;
+            color: white;
+            padding: 20px;
+            text-align: center;
+            font-size: 24px;
+        }
+        #score {
+            font-size: 20px;
+            margin-top: 10px;
+        }
+        #game-area {
+            height: calc(100vh - 100px);
+            position: relative;
+            overflow: hidden;
+        }
+        .note-line {
+            height: calc((100vh - 100px) / 7);
+            border-bottom: 1px solid #ddd;
+            display: flex;
+            align-items: center;
+            padding-left: 10px;
+            color: #aaa;
+            font-size: 24px;
+        }
+        .obstacle {
+            position: absolute;
+            width: 40px;
+            height: 100vh;
+            background-color: #006179;
+            right: -40px;
+        }
+        #pitch-indicator {
+            position: absolute;
+            top: 50%;
+            width: 20px;
+            height: 20px;
+            background-color: #ff5722;
+            left: 60px;
+            border-radius: 50%;
+            transform: translateY(-10px);
+        }
+        #start-button {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            padding: 20px 40px;
+            font-size: 20px;
+            background-color: #006179;
+            color: white;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+        }
+    </style>
+</head>
+<body>
+    <div id="game-container">
+        <div id="header">
+            Triff das <span id="current-note">G</span>liane!
+            <div id="score">Score: 0</div>
+        </div>
+        <div id="game-area">
+            <div class="note-line">H</div>
+            <div class="note-line">A</div>
+            <div class="note-line">G</div>
+            <div class="note-line">F</div>
+            <div class="note-line">E</div>
+            <div class="note-line">D</div>
+            <div class="note-line">C</div>
+            <div id="pitch-indicator"></div>
+        </div>
+        <button id="start-button">Spiel starten</button>
+    </div>
+
+    <script>
+        const notes = ['C', 'D', 'E', 'F', 'G', 'A', 'H'];
+        const baseFrequencies = {
+            'C': 261.63,
+            'D': 293.66,
+            'E': 329.63,
+            'F': 349.23,
+            'G': 392.00,
+            'A': 440.00,
+            'H': 493.88
+        };
+        
+        let score = 0;
+        let gameRunning = false;
+        let audioContext;
+        let analyzer;
+        let microphone;
+        
+        document.getElementById('start-button').addEventListener('click', startGame);
+
+        async function startGame() {
+            if (gameRunning) return;
+
+            // Clear all obstacles from the previous game
+            const obstacles = document.querySelectorAll('.obstacle');
+            obstacles.forEach(obstacle => obstacle.remove());
+            
+            try {
+                const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                audioContext = new AudioContext();
+                microphone = audioContext.createMediaStreamSource(stream);
+                analyzer = audioContext.createAnalyser();
+                analyzer.fftSize = 2048;
+                microphone.connect(analyzer);
+                
+                document.getElementById('start-button').style.display = 'none';
+                gameRunning = true;
+                score = 0;
+                updateScore();
+                requestAnimationFrame(updatePitch);
+                generateObstacle();
+            } catch (err) {
+                alert(err);
+                alert('Bitte erlaube den Zugriff auf das Mikrofon, um das Spiel zu starten.');
+            }
+        }
+
+        function updateScore() {
+            document.getElementById('score').textContent = `Score: ${score}`;
+        }
+
+        function frequencyToPosition(frequency) {
+            if (!frequency) return null;
+            
+            const minFreq = baseFrequencies['C']; // Start at the base frequency of 'C'
+            const maxFreq = baseFrequencies['H']; // End at the base frequency of 'H'
+            const gameHeight = document.getElementById('game-area').clientHeight;
+            
+            // Normalize frequency into one octave using modulo operation
+            while (frequency < minFreq) frequency *= 2; // Bring frequency into range
+            while (frequency > maxFreq) frequency /= 2; // Reduce frequency into range
+        
+            // Convert normalized frequency to logarithmic scale
+            const logFreq = Math.log2(frequency);
+            const logMin = Math.log2(minFreq);
+            const logMax = Math.log2(maxFreq);
+        
+            // Calculate position within the game height
+            let position = (logFreq - logMin) / (logMax - logMin) * gameHeight;
+            position = Math.max(0, Math.min(position, gameHeight)); // Clamp position within bounds
+            return gameHeight - position; // Invert position since 'C' is at the bottom
+        }
+        
+        let estimatedFrequency = null;
+        let estimationError = 1;
+        const processNoise = 0.5; // Noise in the underlying frequency changes
+        const measurementNoise = 2; // Noise in frequency measurements
+
+        function updatePitch() {
+            if (!gameRunning) return;
+
+            const bufferLength = analyzer.frequencyBinCount;
+            const dataArray = new Float32Array(bufferLength);
+            analyzer.getFloatTimeDomainData(dataArray);
+
+            const frequency = autoCorrelate(dataArray, audioContext.sampleRate);
+
+            if (frequency && frequency > 50) { // Filter out very low frequencies
+                if (estimatedFrequency === null) {
+                    estimatedFrequency = frequency;
+                } else {
+                    // Prediction step
+                    estimatedFrequency = estimatedFrequency;
+                    estimationError += processNoise;
+
+                    // Update step
+                    const kalmanGain = estimationError / (estimationError + measurementNoise);
+                    estimatedFrequency =
+                        estimatedFrequency +
+                        kalmanGain * (frequency - estimatedFrequency);
+                    estimationError = (1 - kalmanGain) * estimationError;
+                }
+
+                const position = frequencyToPosition(estimatedFrequency);
+                if (position !== null) {
+                    const pitchIndicator = document.getElementById('pitch-indicator');
+                    pitchIndicator.style.top = `${position}px`;
+                }
+            }
+
+            requestAnimationFrame(updatePitch);
+        }
+
+        function generateObstacle() {
+            if (!gameRunning) return;
+
+            const obstacleTop = document.createElement('div');
+            const obstacleBottom = document.createElement('div');
+            obstacleTop.className = 'obstacle';
+            obstacleBottom.className = 'obstacle';
+            
+            // Choose a somewhat melodic note
+            const prevNote = document.getElementById('current-note').textContent;
+            const prevIndex = notes.indexOf(prevNote);
+            let range = [-2, -1, 0, 1, 2];
+            range = range.filter(r => prevIndex + r >= 0 && prevIndex + r < notes.length);
+            const randomOffset = range[Math.floor(Math.random() * range.length)];
+            const noteIndex = prevIndex + randomOffset;
+            const note = notes[noteIndex];
+            
+            // Position based on note (inverted since C is at bottom)
+            const openBottom = (7 - notes.indexOf(note)) * (100 / 7);
+            obstacleBottom.style.top = `${openBottom}%`;
+            const openTop = 100 - openBottom + (100 / 7);
+            obstacleTop.style.bottom = `${openTop}%`;
+            
+            document.getElementById('game-area').appendChild(obstacleTop);
+            document.getElementById('game-area').appendChild(obstacleBottom);
+            document.getElementById('current-note').textContent = note;
+
+            let positionX = window.innerWidth + 40;
+            
+            function moveObstacle() {
+                if (!gameRunning) {
+                    obstacleTop.remove();
+                    return;
+                }
+
+                positionX -= 2;
+                obstacleTop.style.right = `${window.innerWidth - positionX}px`;
+                obstacleBottom.style.right = `${window.innerWidth - positionX}px`;
+                
+                const pitchIndicator = document.getElementById('pitch-indicator');
+
+                // Check collision
+                if (
+                    // Check if the pitch indicator's right edge is past the left edge of the obstacle
+                    pitchIndicator.getBoundingClientRect().right >= obstacleTop.getBoundingClientRect().left &&
+                    // Check if the pitch indicator's left edge is before the right edge of the obstacle
+                    pitchIndicator.getBoundingClientRect().left <= obstacleTop.getBoundingClientRect().right
+                ) {
+                    const pitchTop = pitchIndicator.getBoundingClientRect().top;
+                    const pitchBottom = pitchIndicator.getBoundingClientRect().bottom;
+
+                    const obstacleTopBottom = obstacleTop.getBoundingClientRect().bottom;
+                    const obstacleBottomTop = obstacleBottom.getBoundingClientRect().top;
+
+                    // If the pitch indicator is within the range of the obstacle and overlaps with either top or bottom
+                    if (pitchTop < obstacleTopBottom || pitchBottom > obstacleBottomTop) {
+                        gameOver();
+                        return;
+                    }
+                }
+
+                if (positionX < -40) {
+                    obstacleTop.remove();
+                    obstacleBottom.remove();
+                    score++;
+                    updateScore();
+                    generateObstacle();
+                    return;
+                }
+
+                requestAnimationFrame(moveObstacle);
+            }
+
+            moveObstacle();
+        }
+
+        function gameOver() {
+            gameRunning = false;
+            document.getElementById('start-button').style.display = 'block';
+            document.getElementById('start-button').innerHTML = `Game Over!<br>Score: ${score}.<br><br>Nochmal spielen?`;
+        }
+
+        function autoCorrelate(buffer, sampleRate) {
+            const SIZE = buffer.length;
+            const MAX_SAMPLES = Math.floor(SIZE / 2);
+            let best_offset = -1;
+            let best_correlation = 0;
+            let rms = 0;
+        
+            // Calculate the root mean square (RMS) of the buffer
+            for (let i = 0; i < SIZE; i++) {
+                rms += buffer[i] * buffer[i];
+            }
+            rms = Math.sqrt(rms / SIZE);
+        
+            // If RMS is too small, return null (signal is too quiet)
+            if (rms < 0.01) return null;
+        
+            // Autocorrelation
+            const correlations = new Array(MAX_SAMPLES).fill(0);
+            for (let offset = 0; offset < MAX_SAMPLES; offset++) {
+                let correlation = 0;
+                for (let i = 0; i < SIZE - offset; i++) {
+                    correlation += buffer[i] * buffer[i + offset];
+                }
+                correlations[offset] = correlation;
+            }
+        
+            // Find the first significant peak
+            let last_correlation = correlations[0];
+            for (let offset = 1; offset < MAX_SAMPLES; offset++) {
+                if (correlations[offset] > last_correlation && correlations[offset] > best_correlation) {
+                    best_correlation = correlations[offset];
+                    best_offset = offset;
+                } else if (correlations[offset] < last_correlation && best_offset > 0) {
+                    // Break after the first peak
+                    break;
+                }
+                last_correlation = correlations[offset];
+            }
+        
+            // If a good correlation is found, calculate frequency
+            if (best_correlation > 0.01) {
+                return sampleRate / best_offset;
+            }
+            return null;
+        }
+    </script>
+</body>
+</html>
