@@ -3,12 +3,16 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-title" content="Triff das Eliane!">
+    <meta name="apple-mobile-web-app-status-bar-style" content="default">
+    <link rel="apple-touch-icon" href="./icon.png">
     <title>Triff das Eliane!</title>
     <style>
         body {
             margin: 0;
             font-family: Arial, sans-serif;
-            /*touch-action: none;*/
+            touch-action: none;
             overflow: hidden;
         }
         #game-container {
@@ -54,9 +58,10 @@
             top: 50%;
             width: 20px;
             height: 20px;
-            background-color: #ff5722;
             left: 60px;
-            border-radius: 50%;
+            background-image: url(eliane.png);
+            background-repeat: no-repeat;
+            background-size: contain;
             transform: translateY(-10px);
         }
         #start-button {
@@ -135,8 +140,8 @@
                 requestAnimationFrame(updatePitch);
                 generateObstacle();
             } catch (err) {
+                alert("Es gab ein Problem.")
                 alert(err);
-                alert('Bitte erlaube den Zugriff auf das Mikrofon, um das Spiel zu starten.');
             }
         }
 
